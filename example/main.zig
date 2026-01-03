@@ -9,28 +9,28 @@ pub fn main() !void {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     const allocator = if (builtin.mode == .Debug) gpa.allocator() else std.heap.c_allocator;
 
+    // Try to avoid std.Io.Threaded due to EAGAIN bug
+    // Initialize std.Io for networking
+    var io_impl = std.Io.Threaded.init(allocator, .{});
+    defer io_impl.deinit();
+    const io = io_impl.io();
+
     // While a connection can be created directly, pools should be used in most
     // cases. The pool's `acquire` method, to get a connection is thread-safe.
     // The pool may start 1 background thread to reconnect disconnected
     // connections (or connections in an invalid state).
-    var pool = pg.Pool.init(allocator, .{
-        .size = 5,
-        .connect = .{
-            .port = 5432,
-            .host = "127.0.0.1",
-        },
-        .auth = .{
-            .username = "postgres",
-            .database = "postgres",
-            .timeout = 10_000,
-        }
-    }) catch |err| {
+    var pool = pg.Pool.init(allocator, .{ .io = io, .size = 5, .connect = .{
+        .port = 5432,
+        .host = "127.0.0.1",
+    }, .auth = .{
+        .username = "postgres",
+        .database = "postgres",
+        .timeout = 30_000,
+    } }) catch |err| {
         log.err("Failed to connect: {}", .{err});
-        std.posix.exit(1);
+        std.process.exit(1);
     };
     defer pool.deinit();
-
-
 
     // One-off commands can be executed directly using the pool using the
     // exec, execOpts, query, queryOpts, row, rowOpts functions. But, due to
@@ -38,21 +38,20 @@ pub fn main() !void {
     // a more detailed error
     _ = try pool.exec("drop table if exists pg_example_users", .{});
 
-
-    // We're using a block to scope the defer conn.release(). In your own code
+    // We're using a block to scope the defer connect.release(). In your own code
     // the scope might naturally be a function or if block. Remember that Zig's
     // defer thankfully executes at the end of the block (unlike Go where defer
     // executes at the end of the function).
     {
         // You can acquire/release connections from the pool. Ideal if you want
         // to execute multiple statements and also exposes a more detailed error.
-        var conn = try pool.acquire();
-        defer conn.release();
+        var connect = try pool.acquire();
+        defer connect.release();
 
         // exec returns the # of rows affected for insert/select/delete
-        _ = conn.exec("create table pg_example_users (id integer, name text)", .{}) catch |err| {
-            if (conn.err) |pg_err| {
-                // conn.err is an optional PostgreSQL error. It has many fields,
+        _ = connect.exec("create table pg_example_users (id integer, name text)", .{}) catch |err| {
+            if (connect.err) |pg_err| {
+                // connect.err is an optional PostgreSQL error. It has many fields,
                 // many of which are nullable, but the `message`, `code` and
                 // `severity` are always present.
                 log.err("create failure: {s}", .{pg_err.message});
@@ -61,23 +60,18 @@ pub fn main() !void {
         };
     }
 
-
     // Of course, exec can take parameters:
-    _ = try pool.exec(
-        "insert into pg_example_users (id, name) values ($1, $2), ($3, $4)",
-        .{1, "Leto", 2, "Ghanima"}
-    );
-
+    _ = try pool.exec("insert into pg_example_users (id, name) values ($1, $2), ($3, $4)", .{ 1, "Leto", 2, "Ghanima" });
 
     {
-        log.info("Example 1", .{});
+        log.info("\n\nExample 1", .{});
         // we can fetch a single row:
-        var conn = try pool.acquire();
-        defer conn.release();
+        var connect = try pool.acquire();
+        defer connect.release();
 
-        var row = (try conn.row("select name from pg_example_users where id = $1", .{1})) orelse unreachable;
+        var row = (try connect.row("select name from pg_example_users where id = $1", .{1})) orelse unreachable;
         // having to deal with row.deinit() is an unfortunate consequence of the
-        // conn.row and pool.row API. Sorry!
+        // connect.row and pool.row API. Sorry!
         defer row.deinit() catch {};
 
         // name will become invalid after row.deinit() is called. dupe it if you
@@ -89,10 +83,10 @@ pub fn main() !void {
     {
         log.info("\n\nExample 2", .{});
         // or we can fetch multiple rows:
-        var conn = try pool.acquire();
-        defer conn.release();
+        var connect = try pool.acquire();
+        defer connect.release();
 
-        var result = try conn.query("select * from pg_example_users order by id", .{});
+        var result = try connect.query("select * from pg_example_users order by id", .{});
         defer result.deinit();
 
         while (try result.next()) |row| {
@@ -100,7 +94,7 @@ pub fn main() !void {
             // string values are only valid until the next call to next()
             // dupe the value if needed
             const name = row.get([]const u8, 1);
-            log.info("User {d}: {s}", .{id, name});
+            log.info("User {d}: {s}", .{ id, name });
         }
     }
 
@@ -108,11 +102,11 @@ pub fn main() !void {
         log.info("\n\nExample 3", .{});
         // pgz uses a configurable read and write buffer to communicate with Postgresql.
         // Larger messages require dynamic allocation. By default this uses the allocator
-        // given to `Pool.init` or `Conn.open`. A different allocator can be specified
+        // given to `Pool.init` or `connect.open`. A different allocator can be specified
         // on a per-query basis. For example, if you're using an HTTP framework that
         // gives you a per-request arena, you could use that arena
-        var conn = try pool.acquire();
-        defer conn.release();
+        var connect = try pool.acquire();
+        defer connect.release();
 
         // Because we pass this allocator to queryOpts, *IF* pg needs to allocate
         // to read the response, it'll use this allocator.
@@ -120,7 +114,7 @@ pub fn main() !void {
         defer arena.deinit();
 
         // use queryOpts, execOpts or rowOpts when specifying optional parameters
-        var result = try conn.queryOpts("select * from pg_example_users order by id", .{}, .{.allocator = arena.allocator()});
+        var result = try connect.queryOpts("select * from pg_example_users order by id", .{}, .{ .allocator = arena.allocator() });
         defer result.deinit();
 
         while (try result.next()) |row| {
@@ -128,14 +122,14 @@ pub fn main() !void {
             // string values are only valid until the next call to next()
             // dupe the value if needed
             const name = row.get([]const u8, 1);
-            log.info("User {d}: {s}", .{id, name});
+            log.info("User {d}: {s}", .{ id, name });
         }
     }
 
     {
         log.info("\n\nExample 4", .{});
         // We can bind and fetch arrays. This simple statement showcases both:
-        var row = (try pool.row("select $1::bool[]", .{[_]bool{true, false, false}})) orelse unreachable;
+        var row = (try pool.row("select $1::bool[]", .{[_]bool{ true, false, false }})) orelse unreachable;
 
         // again, sorry that row.deinit() can error.
         defer row.deinit() catch {};
@@ -156,7 +150,7 @@ pub fn main() !void {
         // But to work, you must tell pgz to load the column_names
         // exec, query and row all have variants that take an option:
         // execOpts, queryOpts and rowOpts
-        var row = (try pool.rowOpts("select $1 as name", .{"teg"}, .{.column_names = true})) orelse unreachable;
+        var row = (try pool.rowOpts("select name from pg_example_users where id = 1", .{}, .{ .column_names = true })) orelse unreachable;
         defer row.deinit() catch {};
 
         log.info("{s}", .{row.getCol([]const u8, "name")});
@@ -167,15 +161,17 @@ pub fn main() !void {
         // There's a cost to looking up a value by name. If you're going to do
         // it in a loop, consider storing the column_index in a variable:
 
-        var conn = try pool.acquire();
-        defer conn.release();
+        var connect = try pool.acquire();
+        defer connect.release();
 
         // again, we have to tell pg to load the column names
-        var result = try conn.queryOpts(
+        var result = try connect.queryOpts(
             \\ select $1 as id, now() as time
             \\ union all
             \\ select $2, now() + interval '1 hour'
-        , .{"25ed0ed1-a35b-41a0-a6bd-89ddb3b8b716", "e2242aa2-db4e-4dd5-8677-76bc19b9e0f5"}, .{.column_names = true},
+        ,
+            .{ "25ed0ed1-a35b-41a0-a6bd-89ddb3b8b716", "e2242aa2-db4e-4dd5-8677-76bc19b9e0f5" },
+            .{ .column_names = true },
         );
         defer result.deinit();
 
@@ -184,7 +180,7 @@ pub fn main() !void {
         while (try result.next()) |row| {
             const id = row.get([]const u8, id_index);
             const unix_micro = row.get(i64, time_index);
-            log.info("{s} {d}", .{id, unix_micro});
+            log.info("{s} {d}", .{ id, unix_micro });
         }
     }
 
@@ -204,7 +200,7 @@ pub fn main() !void {
             defer row.deinit() catch {};
 
             const user = try row.to(User, .{});
-            log.info("{s} {d}", .{user.name, user.power});
+            log.info("{s} {d}", .{ user.name, user.power });
         }
 
         {
@@ -216,11 +212,11 @@ pub fn main() !void {
             var arena = std.heap.ArenaAllocator.init(allocator);
             defer arena.deinit();
 
-            var row = (try pool.rowOpts("select 4000 as power, 'Vegeta' as name", .{}, .{.column_names = true})) orelse unreachable;
+            var row = (try pool.rowOpts("select 4000 as power, 'Vegeta' as name", .{}, .{ .column_names = true })) orelse unreachable;
             defer row.deinit() catch {};
 
-            const user = try row.to(User, .{.map = .name, .allocator = arena.allocator()});
-            log.info("{s} {d}", .{user.name, user.power});
+            const user = try row.to(User, .{ .map = .name, .allocator = arena.allocator() });
+            log.info("{s} {d}", .{ user.name, user.power });
         }
 
         {
@@ -237,14 +233,14 @@ pub fn main() !void {
                 \\ select 4000 as power, 'Vegeta' as name
                 \\ union all
                 \\ select 9001, 'Goku'
-            , .{}, .{.column_names = true});
+            , .{}, .{ .column_names = true });
             defer result.deinit();
 
             // dupe = true tells the mapper to dupe values using the
             // internal result arena
-            var mapper = result.mapper(User, .{.dupe = true});
+            var mapper = result.mapper(User, .{ .dupe = true });
             while (try mapper.next()) |user| {
-                log.info("{s} {d}", .{user.name, user.power});
+                log.info("{s} {d}", .{ user.name, user.power });
             }
         }
     }

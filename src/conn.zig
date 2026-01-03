@@ -121,15 +121,15 @@ pub const Conn = struct {
         return try openAndAuth(allocator, po.opts.connect, po.opts.auth);
     }
 
-    pub fn openAndAuth(allocator: Allocator, opts: Opts, ao: AuthOpts) !Conn {
-        var conn = try open(allocator, opts);
+    pub fn openAndAuth(allocator: Allocator, io: std.Io, opts: Opts, ao: AuthOpts) !Conn {
+        var conn = try open(allocator, io, opts);
         errdefer conn.deinit();
 
         try conn.auth(ao);
         return conn;
     }
 
-    pub fn open(allocator: Allocator, opts: Opts) !Conn {
+    pub fn open(allocator: Allocator, io: std.Io, opts: Opts) !Conn {
         var ssl_ctx: ?*SSLCtx = null;
         switch (opts.tls) {
             .off => {},
@@ -141,13 +141,13 @@ pub const Conn = struct {
             },
         }
         errdefer lib.freeSSLContext(ssl_ctx);
-        var conn = try openWithContext(allocator, opts, ssl_ctx);
+        var conn = try openWithContext(allocator, io, opts, ssl_ctx);
         conn._ssl_ctx = ssl_ctx;
         return conn;
     }
 
-    pub fn openWithContext(allocator: Allocator, opts: Opts, ssl_ctx: ?*SSLCtx) !Conn {
-        var stream = try Stream.connect(allocator, opts, ssl_ctx);
+    pub fn openWithContext(allocator: Allocator, io: std.Io, opts: Opts, ssl_ctx: ?*SSLCtx) !Conn {
+        var stream = try Stream.connect(allocator, io, opts, ssl_ctx);
         errdefer stream.close();
 
         const buf = try Buffer.init(allocator, @max(opts.write_buffer orelse 2048, 128));

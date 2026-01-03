@@ -12,6 +12,7 @@ const Thread = std.Thread;
 const Allocator = std.mem.Allocator;
 
 pub const Pool = struct {
+    _io: std.Io,
     _opts: Opts,
     _timeout: u64,
     _conns: []*Conn,
@@ -25,6 +26,7 @@ pub const Pool = struct {
     _arena: std.heap.ArenaAllocator,
 
     pub const Opts = struct {
+        io: std.Io,
         size: u16 = 10,
         auth: Conn.AuthOpts = .{},
         connect: Conn.Opts = .{},
@@ -73,6 +75,7 @@ pub const Pool = struct {
         const connect_on_init_count = opts.connect_on_init_count orelse size;
 
         pool.* = .{
+            ._io = opts.io,
             ._cond = .{},
             ._mutex = .{},
             ._conns = conns,
@@ -120,7 +123,7 @@ pub const Pool = struct {
 
     pub fn acquire(self: *Pool) !*Conn {
         const conns = self._conns;
-        const deadline = std.time.nanoTimestamp() + @as(i64, @intCast(self._timeout));
+        const start = try std.time.Instant.now();
 
         self._mutex.lock();
         errdefer self._mutex.unlock();
@@ -139,11 +142,12 @@ pub const Pool = struct {
                 lib.metrics.poolEmpty();
 
                 // Calculate remaining timeout
-                const now = std.time.nanoTimestamp();
-                if (now >= deadline) {
+                const now = try std.time.Instant.now();
+                const elapsed = now.since(start);
+                if (elapsed >= self._timeout) {
                     return error.Timeout;
                 }
-                const remaining_ns: u64 = @intCast(deadline - now);
+                const remaining_ns = self._timeout - elapsed;
 
                 try self._cond.timedWait(&self._mutex, remaining_ns);
                 continue;
@@ -286,7 +290,7 @@ const Reconnector = struct {
             }
 
             const conn = newConnection(pool, false) catch {
-                std.Thread.sleep(retry_delay);
+                pool._io.sleep(std.Io.Duration.fromNanoseconds(retry_delay), .awake) catch {};
                 self.mutex.lock();
                 continue :loop;
             };
@@ -335,7 +339,7 @@ fn newConnection(pool: *Pool, log_failure: bool) !*Conn {
     };
     errdefer allocator.destroy(conn);
 
-    conn.* = Conn.open(allocator, opts.connect) catch |err| {
+    conn.* = Conn.open(allocator, pool._io, opts.connect) catch |err| {
         if (log_failure) log.err("connect error: {}", .{err});
         return err;
     };

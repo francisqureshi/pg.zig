@@ -75,10 +75,10 @@ fn ReaderT(comptime T: type) type {
                     .sec = @intCast(@divTrunc(ms, 1000)),
                     .usec = @intCast(@mod(ms, 1000) * 1000),
                 });
-                try posix.setsockopt(self.stream.socket, posix.SOL.SOCKET, posix.SO.RCVTIMEO, &timeval);
+                try posix.setsockopt(self.stream.stream.socket.handle, posix.SOL.SOCKET, posix.SO.RCVTIMEO, &timeval);
                 self.has_timeout = true;
             } else if (self.has_timeout) {
-                try posix.setsockopt(self.stream.socket, posix.SOL.SOCKET, posix.SO.RCVTIMEO, &zero_timeval);
+                try posix.setsockopt(self.stream.stream.socket.handle, posix.SOL.SOCKET, posix.SO.RCVTIMEO, &zero_timeval);
                 self.has_timeout = false;
             }
 
