@@ -3,12 +3,9 @@
     .paths = .{""},
     .version = "0.0.0",
     .fingerprint = 0xbd309ff281fb9f5a,
-    .dependencies = .{
-        .buffer = .{
-            .path = "../buffer.zig",
-        },
-        .metrics = .{
-            .path = "../metrics.zig",
-        }
-    },
+    .dependencies = .{ .buffer = .{
+        .path = "vendor/buffer.zig",
+    }, .metrics = .{
+        .path = "vendor/metrics.zig",
+    } },
 }
