@@ -3,7 +3,7 @@ const builtin = @import("builtin");
 
 const Buffer = @import("buffer.zig").Buffer;
 
-const Mutex = std.Thread.Mutex;
+const Mutex = std.atomic.Mutex;
 const Allocator = std.mem.Allocator;
 
 pub const Pool = struct {
@@ -22,7 +22,7 @@ pub const Pool = struct {
             buffers[i] = sb;
         }
 
-        return .{ .mutex = .{}, .buffers = buffers, .allocator = allocator, .available = pool_size, .buffer_size = buffer_size };
+        return .{ .mutex = .unlocked, .buffers = buffers, .allocator = allocator, .available = pool_size, .buffer_size = buffer_size };
     }
 
     pub fn deinit(self: *Pool) void {
@@ -41,7 +41,7 @@ pub const Pool = struct {
     pub fn acquireWithAllocator(self: *Pool, dyn_allocator: Allocator) !*Buffer {
         const buffers = self.buffers;
 
-        self.mutex.lock();
+        lock(&self.mutex);
         const available = self.available;
         if (available == 0) {
             // dont hold the lock over factory
@@ -63,7 +63,7 @@ pub const Pool = struct {
 
     pub fn release(self: *Pool, sb: *Buffer) void {
         sb.reset();
-        self.mutex.lock();
+        lock(&self.mutex);
 
         var buffers = self.buffers;
         const available = self.available;
@@ -79,6 +79,13 @@ pub const Pool = struct {
         self.mutex.unlock();
     }
 };
+
+/// Spinlock wrapper for std.atomic.Mutex (which only has tryLock)
+fn lock(m: *Mutex) void {
+    while (!m.tryLock()) {
+        std.atomic.spinLoopHint();
+    }
+}
 
 const t = @import("t.zig");
 test "pool: acquire and release" {

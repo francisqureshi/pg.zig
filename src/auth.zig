@@ -80,7 +80,7 @@ fn saslAuth(req: proto.AuthenticationRequest.SASL, stream: *Stream, buf: *Buffer
     }
     var sasl_buf: [1024]u8 = undefined;
     var fba = std.heap.FixedBufferAllocator.init(&sasl_buf);
-    var sasl = try SASL.init(fba.allocator());
+    var sasl = try SASL.init(fba.allocator(), stream.io);
 
     {
         // send the client initial response
@@ -167,9 +167,9 @@ const SASL = struct {
     const Base64Encoder = std.base64.standard.Encoder;
     const Base64Decoder = std.base64.standard.Decoder;
 
-    pub fn init(allocator: Allocator) !SASL {
+    pub fn init(allocator: Allocator, io: std.Io) !SASL {
         var nonce: [18]u8 = undefined;
-        std.crypto.random.bytes(&nonce);
+        try io.randomSecure(&nonce);
 
         var client_first_message = try allocator.alloc(u8, 32);
         client_first_message[0] = 'n';
