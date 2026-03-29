@@ -367,7 +367,7 @@ pub fn RowT(comptime fail_mode: lib.FailMode) type {
         fn toUsingOrdinal(self: *const Self, T: type, allocator: ?Allocator) !T {
             var value: T = undefined;
             inline for (std.meta.fields(T), 0..) |field, column_index| {
-                @field(value, field.name) = try self.mapColumn(&field, column_index, allocator);
+                @field(value, field.name) = try self.mapColumn(field.type, field.default_value_ptr, column_index, allocator);
             }
             return value;
         }
@@ -377,16 +377,15 @@ pub fn RowT(comptime fail_mode: lib.FailMode) type {
             const result = self._result;
             inline for (std.meta.fields(T)) |field| {
                 const name = field.name;
-                @field(value, name) = try self.mapColumn(&field, result.columnIndex(name), allocator);
+                @field(value, name) = try self.mapColumn(field.type, field.default_value_ptr, result.columnIndex(name), allocator);
             }
             return value;
         }
 
-        fn mapColumn(self: *const Self, field: *const std.builtin.Type.StructField, optional_column_index: ?usize, allocator: ?Allocator) !field.type {
-            const T = field.type;
+        fn mapColumn(self: *const Self, comptime T: type, default_value_ptr: ?*const anyopaque, optional_column_index: ?usize, allocator: ?Allocator) !T {
             const column_index = optional_column_index orelse {
-                if (field.default_value_ptr) |dflt| {
-                    return @as(*align(1) const field.type, @ptrCast(dflt)).*;
+                if (default_value_ptr) |dflt| {
+                    return @as(*align(1) const T, @ptrCast(dflt)).*;
                 }
                 return error.FieldColumnMismatch;
             };
@@ -402,7 +401,7 @@ pub fn RowT(comptime fail_mode: lib.FailMode) type {
                 return try slice.alloc(allocator orelse return error.AllocatorRequiredForSliceMapping);
             }
 
-            const value = self.get(field.type, column_index);
+            const value = self.get(T, column_index);
             const a = allocator orelse return value;
             return mapValue(T, if (comptime fail_mode == .safe) try value else value, a);
         }
@@ -459,7 +458,7 @@ pub fn Mapper(comptime T: type) type {
 
             const allocator = self.allocator;
             inline for (std.meta.fields(T), self.column_indexes) |field, optional_column_index| {
-                @field(value, field.name) = try row.mapColumn(&field, optional_column_index, allocator);
+                @field(value, field.name) = try row.mapColumn(field.type, field.default_value_ptr, optional_column_index, allocator);
             }
             return value;
         }

@@ -102,7 +102,8 @@ const TLSStream = struct {
             }
             openssl.SSL_free(ssl);
         }
-        posix.close(self.socket);
+        const socket: Io.net.Socket = .{ .handle = self.socket, .address = undefined };
+        socket.close(self.io);
     }
 
     pub fn writeAll(self: *Stream, data: []const u8) !void {
@@ -152,7 +153,7 @@ const PlainStream = struct {
             const handle = (try hostname.connect(io, port, .{ .mode = .stream })).socket.handle;
             break :blk handle;
         };
-        errdefer posix.close(socket);
+        errdefer (Io.net.Socket{ .handle = socket, .address = undefined }).close(io);
 
         return .{
             .socket = socket,
@@ -161,7 +162,8 @@ const PlainStream = struct {
     }
 
     pub fn close(self: *const PlainStream) void {
-        posix.close(self.socket);
+        const socket: Io.net.Socket = .{ .handle = self.socket, .address = undefined };
+        socket.close(self.io);
     }
 
     pub fn writeAll(self: *const PlainStream, data: []const u8) !void {
